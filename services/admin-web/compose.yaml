@@ -1,0 +1,29 @@
+name: plushki-app
+
+# admin-web: Vue 3 + Vite + vue-router SPA mounted at /admin/ on the
+# central gateway. Built into a static bundle, served by a Caddy sidecar
+# at :80. Reaches backend services via the central gateway (browser-side
+# relative /api/* requests).
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/admin-web/compose.yaml up -d
+#
+# In active dev (hot reload), run `npm run dev` locally on
+# services/admin-web/ — Vite proxies /api/* to localhost:8080 (the central
+# gateway) and serves the SPA at http://localhost:5174/admin/.
+
+services:
+  admin-web:
+    build:
+      context: ./services/admin-web
+      dockerfile: Dockerfile
+    ports:
+      # Direct port for dev convenience — production reaches the SPA
+      # through the central gateway at :8080/admin/.
+      - "8091:80"
+    networks: [shared]
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

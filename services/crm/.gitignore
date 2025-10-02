@@ -1,0 +1,18 @@
+# Composer
+/vendor/
+composer.lock
+
+# Symfony runtime (cache, logs, generated JWT keys)
+/var/
+
+# Local env overrides
+.env
+.env.local
+.env.*.local
+
+# Secrets / keys
+*.pem
+
+# Misc
+*.cache
+*.log

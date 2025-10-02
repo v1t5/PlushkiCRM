@@ -1,0 +1,13 @@
+# Optional yaml overlay loaded at startup.
+# All values can also be supplied via APP_* env vars (env wins).
+# See src/Platform/Config.php for the full schema.
+
+service: identity
+env: dev
+http_addr: ":8080"
+
+database_url: "postgres://identity:identity@localhost:5432/identity?sslmode=disable"
+amqp_url: "amqp://guest:guest@localhost:5672/"
+otlp_endpoint: "localhost:4317"
+
+log_level: info

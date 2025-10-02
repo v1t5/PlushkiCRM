@@ -1,0 +1,84 @@
+name: plushki-app
+
+# Per-service compose snippet — the canonical shape every service copies.
+# Joins the shared infra stack via the external `plushki-shared` network (created
+# by ../../compose.shared.yaml) so this service can reach RabbitMQ, Tempo, Loki,
+# etc. by container name.
+#
+# A service is split into separate containers from the SAME image:
+#   <svc>-db       — the service's own Postgres
+#   <svc>-migrate  — one-shot: applies migrations, then exits
+#   <svc>          — HTTP (FrankenPHP serving on :8080)
+#   <svc>-relay    — outbox relay worker (publishers only)
+#   <svc>-consume-<src> — one consumer worker per subscribed exchange (sinks only)
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/<svc>/compose.yaml up -d
+
+services:
+  template-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=template
+      - POSTGRES_USER=${TEMPLATE_DB_USER:-template}
+      - POSTGRES_PASSWORD=${TEMPLATE_DB_PASSWORD:-template}
+    volumes:
+      - template_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TEMPLATE_DB_USER:-template} -d template"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks: [shared]
+
+  template-migrate:
+    build:
+      context: ./services/_template
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:migrate", "--no-interaction"]
+    environment: &template-env
+      - APP_SERVICE=template
+      - APP_ENV=dev
+      - APP_HTTP_ADDR=:8080
+      - APP_DATABASE_URL=postgres://${TEMPLATE_DB_USER:-template}:${TEMPLATE_DB_PASSWORD:-template}@template-db:5432/template?sslmode=disable
+      - APP_AMQP_URL=amqp://${RABBITMQ_USER:-plushki}:${RABBITMQ_PASSWORD:-plushki}@rabbitmq:5672/
+      - APP_OTLP_ENDPOINT=http://tempo:4318
+      - APP_LOG_LEVEL=info
+    depends_on:
+      template-db:
+        condition: service_healthy
+    networks: [shared]
+    restart: "no"
+
+  template:
+    build:
+      context: ./services/_template
+      dockerfile: Dockerfile
+    environment: *template-env
+    # Dev-only: services are only reachable through the gateway in prod.
+    # ports:
+    #   - "8099:8080"
+    depends_on:
+      template-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+  # Publishers run an outbox relay. (Pure consumers / read-only projectors omit it.)
+  template-relay:
+    build:
+      context: ./services/_template
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:outbox-relay", "--no-interaction"]
+    environment: *template-env
+    depends_on:
+      template-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+volumes:
+  template_db_data:
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

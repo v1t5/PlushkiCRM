@@ -1,0 +1,89 @@
+{
+	auto_https off
+	admin :2019
+
+	servers {
+		metrics
+	}
+}
+
+:80 {
+	log {
+		output stdout
+		format json
+	}
+
+	tracing {
+		span caddy-request
+	}
+
+	# CORS for the Vite dev server (POS SPA, default origin http://localhost:5173).
+	# Dev-only: in prod the SPA will be served from the same origin as the gateway.
+	@cors_origin header Origin http://localhost:5173
+	@options method OPTIONS
+
+	handle @options {
+		header Access-Control-Allow-Origin "http://localhost:5173"
+		header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		header Access-Control-Allow-Headers "Content-Type, Authorization"
+		header Access-Control-Allow-Credentials "true"
+		header Access-Control-Max-Age "86400"
+		header Vary "Origin"
+		respond 204
+	}
+
+	header @cors_origin Access-Control-Allow-Origin "http://localhost:5173"
+	header @cors_origin Access-Control-Allow-Credentials "true"
+	header @cors_origin Vary "Origin"
+
+	# Sanity endpoints kept from Phase 0.
+	handle /echo* {
+		respond "OK from Caddy: {http.request.method} {http.request.uri.path}" 200
+	}
+
+	handle /health {
+		respond "ok" 200
+	}
+
+	# API gateway: /api/<svc>/* → <svc>:8080/* (matching prefix stripped).
+	# Each backend service exposes /v1/... routes inside, so callers use
+	# /api/orders/v1/orders, /api/catalog/v1/products, etc.
+	handle_path /api/identity/* {
+		reverse_proxy identity:8080
+	}
+	handle_path /api/catalog/* {
+		reverse_proxy catalog:8080
+	}
+	handle_path /api/orders/* {
+		reverse_proxy orders:8080
+	}
+	handle_path /api/inventory/* {
+		reverse_proxy inventory:8080
+	}
+	handle_path /api/production/* {
+		reverse_proxy production:8080
+	}
+	handle_path /api/crm/* {
+		reverse_proxy crm:8080
+	}
+	handle_path /api/reporting/* {
+		reverse_proxy reporting:8080
+	}
+
+	# Phase 5: admin-web SPA mounted at /admin/. Strips the prefix so the
+	# sidecar serves /, /assets/*, /index.html. Vite's `base: '/admin/'`
+	# and vue-router's history base keep all browser-side URLs prefixed
+	# correctly. handle_path runs before the fallback below.
+	handle_path /admin/* {
+		reverse_proxy admin-web:80
+	}
+
+	# Fallback: proxy unmatched paths to the pos-web SPA so browsers on
+	# :8080 see the SPA at / and the backend services at /api/* —
+	# same-origin, no CORS in production. If pos-web isn't running,
+	# Caddy returns a 502 here; the dev `:5173` flow doesn't depend on
+	# this route at all.
+	handle {
+		reverse_proxy pos-web:80
+	}
+}

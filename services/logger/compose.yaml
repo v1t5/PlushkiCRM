@@ -1,0 +1,29 @@
+name: plushki-app
+
+# logger — Stateless
+# sentinel: no Postgres, no HTTP. One container runs `plushki:tap`, which binds an
+# exclusive auto-delete queue with `#` to every per-context topic exchange and
+# logs each delivery, reconstructing the OTel trace from the envelope trace_id so
+# Grafana shows one trace spanning HTTP → outbox publish → consume → log line.
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/logger/compose.yaml up -d
+
+services:
+  logger:
+    build:
+      context: ./services/logger
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:tap", "--no-interaction"]
+    environment:
+      - APP_SERVICE=logger
+      - APP_ENV=dev
+      - APP_AMQP_URL=amqp://${RABBITMQ_USER:-plushki}:${RABBITMQ_PASSWORD:-plushki}@rabbitmq:5672/
+      - APP_OTLP_ENDPOINT=http://tempo:4318
+      - APP_LOG_LEVEL=info
+    networks: [shared]
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

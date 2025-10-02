@@ -1,0 +1,99 @@
+name: plushki-app
+
+# reporting — Read-only projector: it
+# publishes nothing, so NO outbox table or relay (intentional break from the
+# canonical service shape). Containers: db, one-shot migrate, HTTP read server,
+# and three consumer workers (one per source filter). A single shared
+# applied_events table enforces idempotency across all three.
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/reporting/compose.yaml up -d
+
+services:
+  reporting-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=reporting
+      - POSTGRES_USER=${REPORTING_DB_USER:-reporting}
+      - POSTGRES_PASSWORD=${REPORTING_DB_PASSWORD:-reporting}
+    volumes:
+      - reporting_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${REPORTING_DB_USER:-reporting} -d reporting"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks: [shared]
+
+  reporting-migrate:
+    build:
+      context: ./services/reporting
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:migrate", "--no-interaction"]
+    environment: &reporting-env
+      - APP_SERVICE=reporting
+      - APP_ENV=dev
+      - APP_HTTP_ADDR=:8080
+      - APP_DATABASE_URL=postgres://${REPORTING_DB_USER:-reporting}:${REPORTING_DB_PASSWORD:-reporting}@reporting-db:5432/reporting?sslmode=disable
+      - APP_AMQP_URL=amqp://${RABBITMQ_USER:-plushki}:${RABBITMQ_PASSWORD:-plushki}@rabbitmq:5672/
+      - APP_OTLP_ENDPOINT=http://tempo:4318
+      - APP_LOG_LEVEL=info
+    depends_on:
+      reporting-db:
+        condition: service_healthy
+    networks: [shared]
+    restart: "no"
+
+  reporting:
+    build:
+      context: ./services/reporting
+      dockerfile: Dockerfile
+    environment: *reporting-env
+    ports:
+      # Dev-only: reporting is only reachable through the gateway in prod.
+      - "8090:8080"
+    depends_on:
+      reporting-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+  reporting-consume-orders:
+    build:
+      context: ./services/reporting
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:consume-orders-fulfilled", "--no-interaction"]
+    environment: *reporting-env
+    depends_on:
+      reporting-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+  reporting-consume-stock-low:
+    build:
+      context: ./services/reporting
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:consume-stock-low", "--no-interaction"]
+    environment: *reporting-env
+    depends_on:
+      reporting-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+  reporting-consume-movements:
+    build:
+      context: ./services/reporting
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:consume-movements", "--no-interaction"]
+    environment: *reporting-env
+    depends_on:
+      reporting-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+volumes:
+  reporting_db_data:
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

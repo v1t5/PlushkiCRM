@@ -1,0 +1,89 @@
+name: plushki-app
+
+# crm — Publisher (outbox/relay → CRM
+# exchange) AND consumer (orders.v1.fulfilled → loyalty). Containers: db,
+# one-shot migrate (migrations + walk-in bootstrap), HTTP server, outbox relay,
+# one consumer worker. Loyalty bumps once per fulfilled order (idempotent via
+# applied_order_events).
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/crm/compose.yaml up -d
+
+services:
+  crm-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=crm
+      - POSTGRES_USER=${CRM_DB_USER:-crm}
+      - POSTGRES_PASSWORD=${CRM_DB_PASSWORD:-crm}
+    volumes:
+      - crm_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CRM_DB_USER:-crm} -d crm"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks: [shared]
+
+  crm-migrate:
+    build:
+      context: ./services/crm
+      dockerfile: Dockerfile
+    command: ["sh", "-c", "php bin/console plushki:migrate --no-interaction && php bin/console plushki:bootstrap-walkin --no-interaction"]
+    environment: &crm-env
+      - APP_SERVICE=crm
+      - APP_ENV=dev
+      - APP_HTTP_ADDR=:8080
+      - APP_DATABASE_URL=postgres://${CRM_DB_USER:-crm}:${CRM_DB_PASSWORD:-crm}@crm-db:5432/crm?sslmode=disable
+      - APP_AMQP_URL=amqp://${RABBITMQ_USER:-plushki}:${RABBITMQ_PASSWORD:-plushki}@rabbitmq:5672/
+      - APP_OTLP_ENDPOINT=http://tempo:4318
+      - APP_LOG_LEVEL=info
+      - APP_OUTBOX_EXCHANGE=CRM
+    depends_on:
+      crm-db:
+        condition: service_healthy
+    networks: [shared]
+    restart: "no"
+
+  crm:
+    build:
+      context: ./services/crm
+      dockerfile: Dockerfile
+    environment: *crm-env
+    ports:
+      # Dev-only: crm is only reachable through the gateway in prod.
+      - "8088:8080"
+    depends_on:
+      crm-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+  crm-relay:
+    build:
+      context: ./services/crm
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:outbox-relay", "--no-interaction"]
+    environment: *crm-env
+    depends_on:
+      crm-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+  crm-consume-orders:
+    build:
+      context: ./services/crm
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:consume-orders", "--no-interaction"]
+    environment: *crm-env
+    depends_on:
+      crm-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+volumes:
+  crm_db_data:
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

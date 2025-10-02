@@ -1,0 +1,78 @@
+name: plushki-app
+
+# orders — Joins the shared infra stack via the external `plushki-shared`
+# network. Four containers from one image: db, a one-shot migrate, the HTTP
+# server, and the outbox relay worker. orders calls catalog over HTTP at
+# APP_CATALOG_URL.
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/orders/compose.yaml up -d
+
+services:
+  orders-db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=orders
+      - POSTGRES_USER=${ORDERS_DB_USER:-orders}
+      - POSTGRES_PASSWORD=${ORDERS_DB_PASSWORD:-orders}
+    volumes:
+      - orders_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ORDERS_DB_USER:-orders} -d orders"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    networks: [shared]
+
+  orders-migrate:
+    build:
+      context: ./services/orders
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:migrate", "--no-interaction"]
+    environment: &orders-env
+      - APP_SERVICE=orders
+      - APP_ENV=dev
+      - APP_HTTP_ADDR=:8080
+      - APP_DATABASE_URL=postgres://${ORDERS_DB_USER:-orders}:${ORDERS_DB_PASSWORD:-orders}@orders-db:5432/orders?sslmode=disable
+      - APP_AMQP_URL=amqp://${RABBITMQ_USER:-plushki}:${RABBITMQ_PASSWORD:-plushki}@rabbitmq:5672/
+      - APP_OTLP_ENDPOINT=http://tempo:4318
+      - APP_LOG_LEVEL=info
+      - APP_OUTBOX_EXCHANGE=ORDERS
+      - APP_CATALOG_URL=http://catalog:8080
+    depends_on:
+      orders-db:
+        condition: service_healthy
+    networks: [shared]
+    restart: "no"
+
+  orders:
+    build:
+      context: ./services/orders
+      dockerfile: Dockerfile
+    environment: *orders-env
+    ports:
+      # Dev-only: orders is only reachable through the gateway in prod.
+      - "8083:8080"
+    depends_on:
+      orders-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+  orders-relay:
+    build:
+      context: ./services/orders
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:outbox-relay", "--no-interaction"]
+    environment: *orders-env
+    depends_on:
+      orders-migrate:
+        condition: service_completed_successfully
+    networks: [shared]
+
+volumes:
+  orders_db_data:
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

@@ -1,96 +1,68 @@
-NODE_MODULES = ./node_modules
-VENDOR = ./vendor
+SHARED := compose.shared.yaml
 
-init: pull build up composer-install migrate fixtures
+# Per-service compose snippets. Order matters for `make stack-up`: dependents
+# are listed after their dependencies (orders depends on catalog HTTP at place
+# time, etc), so a fresh `up -d` brings everything up cleanly.
+SERVICES := identity logger catalog orders notifications tg-bot inventory production crm pos-web admin-web reporting
 
-pull:
-	docker compose pull
+# `-f compose.shared.yaml -f services/<svc>/compose.yaml -f ...` chain.
+COMPOSE_FILES := -f $(SHARED) $(foreach s,$(SERVICES),-f services/$(s)/compose.yaml)
 
-build:
-	docker compose build
+.PHONY: dev-up dev-down dev-restart dev-logs dev-ps dev-verify \
+        stack-up stack-down stack-ps stack-build test
 
-up:
-	docker compose up -d
+# --- Shared infra only (Phase 0 / dev sentinel) ---
 
-composer-install:
-	docker compose run --rm php-fpm composer install
+dev-up:
+	docker compose -f $(SHARED) up -d
 
-migrate:
-	docker compose run --rm php-fpm php bin/console doctrine:migrations:migrate --no-interaction
+dev-down:
+	docker compose -f $(SHARED) down
 
-fixtures:
-	docker compose run --rm php-fpm php bin/console hautelook:fixtures:load --no-interaction
+dev-restart:
+	docker compose -f $(SHARED) restart $(svc)
 
-##
-# UTILS
-##
-clean-log:
-	rm -rf ./var/log
+dev-logs:
+	docker compose -f $(SHARED) logs -f $(svc)
 
-clean-cache:
-	rm -rf ./var/cache
+dev-ps:
+	docker compose -f $(SHARED) ps
 
-watch:
-	npm run watch
+# End-to-end check: hit Caddy, then ask Loki and Tempo what they captured.
+dev-verify:
+	@echo "==> curl http://localhost:8080/echo/hello"
+	@curl -fsS http://localhost:8080/echo/hello && echo
+	@echo "==> sleeping 4s for promtail + tempo flush"
+	@sleep 4
+	@echo "==> Loki query: {service=\"caddy\"}"
+	@curl -fsS -G 'http://localhost:3100/loki/api/v1/query_range' \
+		--data-urlencode 'query={service="caddy"}' \
+		--data-urlencode 'limit=3' | head -c 600 ; echo
+	@echo "==> Tempo search: service.name=caddy"
+	@curl -fsS -G 'http://localhost:3200/api/search' \
+		--data-urlencode 'tags=service.name=caddy' \
+		--data-urlencode 'limit=3' | head -c 600 ; echo
+	@echo "==> Grafana UI: http://localhost:3000 (anon admin enabled)"
 
-##
-# ELK
-##
-elk-up:
-	docker compose -f compose.elk.yaml up -d
+# --- Whole stack (shared + every service) ---
 
-elk-logs:
-	docker compose -f compose.elk.yaml logs -f
+stack-up:
+	docker compose $(COMPOSE_FILES) up -d
 
-elk-status:
-	docker compose -f compose.elk.yaml ps elasticsearch kibana
+stack-down:
+	docker compose $(COMPOSE_FILES) down
 
-elk-clean:
-	docker compose down -v
-	docker volume rm testo-app_elasticsearch_data
+stack-ps:
+	docker compose $(COMPOSE_FILES) ps
 
-##
-# MESSENGER
-##
-messenger-consume:
-	docker compose run --rm php-fpm php bin/console messenger:consume async -vv
+# Rebuild one service's image (usage: make stack-build svc=crm).
+# Without svc=, builds everything that has a build: stanza.
+stack-build:
+	docker compose $(COMPOSE_FILES) build $(svc)
 
-messenger-failed:
-	docker compose run --rm php-fpm php bin/console messenger:failed:show
+# --- Tests ---
 
-messenger-retry:
-	docker compose run --rm php-fpm php bin/console messenger:failed:retry
-
-messenger-setup:
-	docker compose run --rm php-fpm php bin/console messenger:setup-transports
-
-##
-# RABBITMQ
-##
-rabbitmq-status:
-	docker compose ps rabbitmq
-
-rabbitmq-logs:
-	docker compose logs -f rabbitmq
-
-rabbitmq-clean:
-	docker compose down rabbitmq
-	docker volume rm testo-app_rabbitmq_data
-
-##
-# REFACTORING
-##
-
-check:
-	make refactoring --keep-going
-
-refactoring: eslint php-cs-fixer
-
-eslint:
-	${NODE_MODULES}/.bin/eslint assets/js/ --ext .js,.vue --fix
-
-php-cs-fixer:
-	${VENDOR}/bin/php-cs-fixer fix src/  --verbose
-
-phpstan:
-	${VENDOR}/bin/phpstan analyse src --level 4
+# Run the PHPUnit suites in a throwaway PHP 8.3 container (no local PHP needed).
+# All services by default; a subset with `make test svc="orders crm"`.
+test:
+	MSYS_NO_PATHCONV=1 docker run --rm -v "$(CURDIR)":/app -w /app php:8.3-cli-alpine sh scripts/run-tests.sh $(svc)

@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# Phase 4 starter dashboard provisioning. Grafana watches /etc/grafana/
+# provisioning/dashboards/ for YAML providers and loads any dashboard JSON
+# from the configured path. Drop new JSON files into infra/grafana/dashboards/
+# and they show up automatically after a Grafana restart.
+providers:
+  - name: plushki
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

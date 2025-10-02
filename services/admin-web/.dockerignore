@@ -1,0 +1,9 @@
+node_modules
+dist
+.vite
+.git
+*.log
+tests/
+phpunit.xml
+.phpunit.cache/
+.composer-cache/

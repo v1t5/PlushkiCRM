@@ -1,0 +1,9 @@
+vendor/
+var/
+.env.local
+.git
+*.md
+tests/
+phpunit.xml
+.phpunit.cache/
+.composer-cache/

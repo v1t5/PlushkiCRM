@@ -1,0 +1,45 @@
+name: plushki-app
+
+# tg-bot — Stateless: no Postgres, no AMQP, no migrations. Joins the shared
+# infra stack via the external `plushki-shared` network. Two containers from one
+# image: the HTTP server (health/metrics only) and the Telegram long-poll worker
+# (`tg-bot-poll`, the `plushki:poll` command). The poller exits cleanly when
+# APP_TG_BOT_TOKEN is empty, so dev stacks without a bot token just run the HTTP
+# probes.
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/tg-bot/compose.yaml up -d
+
+services:
+  tg-bot:
+    build:
+      context: ./services/tg-bot
+      dockerfile: Dockerfile
+    environment: &tg-bot-env
+      - APP_SERVICE=tg-bot
+      - APP_ENV=dev
+      - APP_HTTP_ADDR=:8080
+      - APP_OTLP_ENDPOINT=http://tempo:4318
+      - APP_LOG_LEVEL=info
+      - APP_CATALOG_URL=http://catalog:8080
+      - APP_ORDERS_URL=http://orders:8080
+      - APP_TG_API_BASE=https://api.telegram.org
+      - APP_TG_BOT_TOKEN=${TG_BOT_TOKEN:-}
+      - APP_TG_POLL_TIMEOUT_S=30
+    ports:
+      # Dev-only: tg-bot is only reachable through the gateway in prod.
+      - "8085:8080"
+    networks: [shared]
+
+  tg-bot-poll:
+    build:
+      context: ./services/tg-bot
+      dockerfile: Dockerfile
+    command: ["php", "bin/console", "plushki:poll", "--no-interaction"]
+    environment: *tg-bot-env
+    networks: [shared]
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

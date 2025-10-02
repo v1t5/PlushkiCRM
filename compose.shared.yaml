@@ -1,0 +1,127 @@
+name: plushki-app
+
+# Phase 0 step 2: shared infrastructure stack.
+# No application services live here yet — `identity`, the throwaway logger
+# consumer, and later services will land in their own per-service compose files
+# that reference this stack via `name: plushki-app` and the `shared` network.
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    hostname: rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-plushki}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-plushki}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "5672:5672"    # AMQP client
+      - "15672:15672"  # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [shared]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks: [shared]
+
+  loki:
+    image: grafana/loki:3.0.0
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./infra/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks: [shared]
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./infra/promtail/config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - promtail_data:/tmp
+    depends_on: [loki]
+    networks: [shared]
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./infra/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"   # tempo HTTP API
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    networks: [shared]
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    command:
+      - "--config.file=/etc/prometheus/config.yaml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./infra/prometheus/config.yaml:/etc/prometheus/config.yaml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [shared]
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+    volumes:
+      - ./infra/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./infra/grafana/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on: [loki, tempo, prometheus]
+    networks: [shared]
+
+  caddy:
+    image: caddy:2.8-alpine
+    environment:
+      # Caddy's OTel module uses gRPC OTLP (port 4317), not HTTP (4318).
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=caddy
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "8080:80"
+    depends_on: [tempo]
+    networks: [shared]
+
+volumes:
+  rabbitmq_data:
+  redis_data:
+  loki_data:
+  promtail_data:
+  tempo_data:
+  prometheus_data:
+  grafana_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  shared:
+    name: plushki-shared
+    driver: bridge

@@ -1,0 +1,28 @@
+name: plushki-app
+
+# pos-web: Vue 3 + Vite SPA built into a static bundle, served by a
+# Caddy sidecar at :80. Reaches backend services via the central
+# plushki-app gateway (browser-side relative /api/* requests).
+#
+# Usage from repo root:
+#   docker compose -f compose.shared.yaml -f services/pos-web/compose.yaml up -d
+#
+# In active dev (with hot reload), run `npm run dev` locally on
+# services/pos-web/ — Vite proxies /api/* to localhost:8080 (the
+# central gateway).
+
+services:
+  pos-web:
+    build:
+      context: ./services/pos-web
+      dockerfile: Dockerfile
+    ports:
+      # Direct port for dev convenience — production reaches the SPA
+      # through the central gateway at :8080 (Caddyfile fallback).
+      - "8089:80"
+    networks: [shared]
+
+networks:
+  shared:
+    name: plushki-shared
+    external: true

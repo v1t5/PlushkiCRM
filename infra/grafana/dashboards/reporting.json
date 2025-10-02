@@ -1,0 +1,108 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "uid": "reporting-overview",
+  "title": "Reporting — Overview",
+  "tags": ["plushki", "reporting"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Daily revenue (kopecks)",
+      "datasource": { "type": "postgres", "uid": "reporting" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT day::timestamptz AS time, SUM(revenue_kopecks)::bigint AS revenue_kopecks FROM sales_by_day WHERE $__timeFilter(day::timestamptz) GROUP BY day ORDER BY day",
+          "datasource": { "type": "postgres", "uid": "reporting" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Daily order count",
+      "datasource": { "type": "postgres", "uid": "reporting" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT day::timestamptz AS time, SUM(order_count)::bigint AS order_count FROM sales_by_day WHERE $__timeFilter(day::timestamptz) GROUP BY day ORDER BY day",
+          "datasource": { "type": "postgres", "uid": "reporting" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Top items (by qty, last 30d)",
+      "datasource": { "type": "postgres", "uid": "reporting" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT name, sku, SUM(qty_sold)::bigint AS qty_sold, SUM(revenue_kopecks)::bigint AS revenue_kopecks FROM top_items WHERE $__timeFilter(day::timestamptz) GROUP BY name, sku ORDER BY qty_sold DESC LIMIT 10",
+          "datasource": { "type": "postgres", "uid": "reporting" }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Waste percentage (window)",
+      "datasource": { "type": "postgres", "uid": "reporting" },
+      "gridPos": { "h": 9, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "WITH agg AS (SELECT COALESCE(SUM(CASE WHEN type='WASTE' THEN ABS(total_qty_in_base) ELSE 0 END),0) AS waste, COALESCE(SUM(CASE WHEN type IN ('WASTE','CONSUMED_BY_PRODUCTION','SOLD','OUT') THEN ABS(total_qty_in_base) ELSE 0 END),0) AS deduct FROM movements_by_day WHERE $__timeFilter(day::timestamptz)) SELECT CASE WHEN deduct > 0 THEN waste::float/deduct::float ELSE 0 END AS waste_percentage FROM agg",
+          "datasource": { "type": "postgres", "uid": "reporting" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.15 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Recent low-stock events",
+      "datasource": { "type": "postgres", "uid": "reporting" },
+      "gridPos": { "h": 9, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT occurred_at, sku, name, current_qty_in_base, threshold_qty_in_base FROM stock_low_events WHERE $__timeFilter(occurred_at) ORDER BY occurred_at DESC LIMIT 20",
+          "datasource": { "type": "postgres", "uid": "reporting" }
+        }
+      ]
+    }
+  ]
+}

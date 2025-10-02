@@ -1,0 +1,18 @@
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	root * /srv
+	encode gzip
+	file_server
+
+	# SPA fallback: index.html serves any unknown path so the in-app
+	# router (when it lands) doesn't 404 on deep links.
+	try_files {path} /index.html
+
+	# This sidecar does NOT proxy /api — backend traffic flows through
+	# the central plushki-app gateway. The browser hits the central
+	# gateway directly (or via Vite's dev proxy in `npm run dev`).
+}

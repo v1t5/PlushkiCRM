@@ -20,8 +20,6 @@ services:
         condition: service_started
       fluent-bit:
         condition: service_started
-      rabbitmq:
-        condition: service_healthy
     environment:
       - APP_ENV=${APP_ENV}
       - APP_SECRET=${APP_SECRET}
@@ -48,8 +46,6 @@ services:
         condition: service_started
       fluent-bit:
         condition: service_started
-      rabbitmq:
-        condition: service_healthy
     command: php bin/console messenger:consume async --verbose
     restart: always
     environment:
@@ -124,24 +120,6 @@ services:
     networks:
       - testo-app-network
 
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    restart: unless-stopped
-    environment:
-      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
-      - MESSENGER_TRANSPORT_DSN=${MESSENGER_TRANSPORT_DSN}
-      - TZ=Europe/Moscow
-    networks:
-      - testo-app-network
-    healthcheck:
-      test: [ "CMD", "rabbitmq-diagnostics", "-q", "check_running" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
   fluent-bit:
     image: ghcr.io/v1t5/v1t5/testo-fluent:master
     environment:
@@ -163,7 +141,6 @@ volumes:
   database_data:
   app_data:
   redis_data:
-  rabbitmq_data:
 
 networks:
   testo-app-network:

@@ -1,46 +1,52 @@
 services:
   database:
-    image: mysql:8.0
+    image: postgres:16
     environment:
-      - MYSQL_DATABASE=${MYSQL_DATABASE}
-      - MYSQL_USER=${MYSQL_USER}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - TZ=Europe/Moscow
     volumes:
-      - database_data:/var/lib/mysql
+      - database_data:/var/lib/postgresql/data
     networks:
       - testo-app-network
 
   php-fpm:
-    image: ghcr.io/v1t3/v1t3/testo-core:master
+    image: ghcr.io/v1t5/v1t5/testo-core:master
     depends_on:
       database:
         condition: service_started
       redis:
+        condition: service_started
+      fluent-bit:
         condition: service_started
       rabbitmq:
         condition: service_healthy
     environment:
       - APP_ENV=${APP_ENV}
       - APP_SECRET=${APP_SECRET}
-      - DATABASE_URL=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@database:3306/${MYSQL_DATABASE}?serverVersion=8.0
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}?serverVersion=16&charset=utf8
       - JWT_SECRET=${JWT_SECRET}
-      - GRAYLOG_HOST=${GRAYLOG_HOST}
-      - GRAYLOG_PORT=${GRAYLOG_PORT}
       - MESSENGER_TRANSPORT_DSN=${MESSENGER_TRANSPORT_DSN}
       - TZ=Europe/Moscow
     volumes:
       - app_data:/var/www/
     networks:
       - testo-app-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: php.logs
 
   php-worker:
-    image: ghcr.io/v1t3/v1t3/testo-core:master
+    image: ghcr.io/v1t5/v1t5/testo-core:master
     depends_on:
       database:
         condition: service_started
       redis:
+        condition: service_started
+      fluent-bit:
         condition: service_started
       rabbitmq:
         condition: service_healthy
@@ -49,20 +55,26 @@ services:
     environment:
       - APP_ENV=${APP_ENV}
       - APP_SECRET=${APP_SECRET}
-      - DATABASE_URL=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@database:3306/${MYSQL_DATABASE}?serverVersion=8.0
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}?serverVersion=16&charset=utf8
       - JWT_SECRET=${JWT_SECRET}
-      - GRAYLOG_HOST=${GRAYLOG_HOST}
-      - GRAYLOG_PORT=${GRAYLOG_PORT}
       - MESSENGER_TRANSPORT_DSN=${MESSENGER_TRANSPORT_DSN}
       - TZ=Europe/Moscow
     volumes:
       - app_data:/var/www/
     networks:
       - testo-app-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: php.logs
 
   tg-bot:
-    image: ghcr.io/v1t3/v1t3/testo-tg-bot:master
+    image: ghcr.io/v1t5/v1t5/testo-tg-bot:master
     command: php bin/console app:telegram-bot --verbose
+    depends_on:
+      fluent-bit:
+        condition: service_started
     environment:
       - TG_APP_ENV=${APP_ENV}
       - TG_APP_SECRET=${APP_SECRET}
@@ -76,9 +88,14 @@ services:
       - app_data:/var/www/
     networks:
       - testo-app-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: php.logs
 
   nginx:
-    image: ghcr.io/v1t3/v1t3/testo-nginx-proxy:master
+    image: ghcr.io/v1t5/v1t5/testo-nginx-proxy:master
     depends_on:
       - php-fpm
       - tg-bot
@@ -93,6 +110,11 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: localhost:24224
+        tag: nginx.logs
 
   redis:
     image: redis:latest
@@ -120,81 +142,28 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  mongodb:
-    image: mongo:6.0
-    restart: unless-stopped
+  fluent-bit:
+    image: ghcr.io/v1t5/v1t5/testo-fluent:master
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-admin123}
-    volumes:
-      - mongodb_data:/data/db
+      - FLB_LOG_LEVEL=info
+      - ELASTIC_HOST=${ELASTIC_HOST}
+      - ELASTIC_PORT=${ELASTIC_PORT}
+      - ELASTIC_INDEX=${ELASTIC_INDEX}
+      # Base auth
+      - ELASTIC_HTTP_USER=${ELASTIC_HTTP_USER}
+      - ELASTIC_HTTP_PASS=${ELASTIC_HTTP_PASS}
+    command: ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.conf"]
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
     networks:
       - testo-app-network
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  opensearch:
-    image: opensearchproject/opensearch:2.11.0
-    restart: unless-stopped
-    environment:
-      - discovery.type=single-node
-      - plugins.security.ssl.http.enabled=false
-      - plugins.security.disabled=true
-      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-      - bootstrap.memory_lock=true
-      - TZ=Europe/Moscow
-    volumes:
-      - opensearch_data:/usr/share/opensearch/data
-    networks:
-      - testo-app-network
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:9200/_cluster/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
-  graylog:
-    image: graylog/graylog:6.3
-    restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_started
-      opensearch:
-        condition: service_started
-    entrypoint: "/usr/bin/tini -- wait-for-it opensearch:9200 --  /docker-entrypoint.sh"
-    environment:
-      - GRAYLOG_PASSWORD_SECRET=${GRAYLOG_PASSWORD_SECRET:-somepasswordpepper}
-      - GRAYLOG_ROOT_PASSWORD_SHA2=${GRAYLOG_ROOT_PASSWORD_SHA2:-8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918}
-      - GRAYLOG_HTTP_EXTERNAL_URI=${GRAYLOG_EXTERNAL_URL:-http://localhost:4080/graylog/}
-      - GRAYLOG_ELASTICSEARCH_HOSTS=http://opensearch:9200
-      - GRAYLOG_MONGODB_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-admin123}@mongodb:27017/graylog?authSource=admin
-        # To make reporting (headless_shell) work inside a Docker container
-      - GRAYLOG_REPORT_DISABLE_SANDBOX=true
-      - TZ=Europe/Moscow
-    volumes:
-      - graylog_data:/usr/share/graylog/data
-    networks:
-      - testo-app-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/api/system/lbstatus"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
 
 volumes:
   database_data:
   app_data:
   redis_data:
   rabbitmq_data:
-  mongodb_data:
-  opensearch_data:
-  graylog_data:
 
 networks:
   testo-app-network:

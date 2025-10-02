@@ -34,20 +34,20 @@ watch:
 	npm run watch
 
 ##
-# GRAYLOG
+# ELK
 ##
-graylog-up:
-	docker compose up -d mongodb opensearch graylog
+elk-up:
+	docker compose -f compose.elk.yaml up -d
 
-graylog-logs:
-	docker compose logs -f graylog
+elk-logs:
+	docker compose -f compose.elk.yaml logs -f
 
-graylog-status:
-	docker compose ps mongodb opensearch graylog
+elk-status:
+	docker compose -f compose.elk.yaml ps elasticsearch kibana
 
-graylog-clean:
+elk-clean:
 	docker compose down -v
-	docker volume rm hlebsol_core_mongodb_data hlebsol_core_opensearch_data hlebsol_core_graylog_data
+	docker volume rm testo-app_elasticsearch_data
 
 ##
 # MESSENGER
@@ -75,7 +75,7 @@ rabbitmq-logs:
 
 rabbitmq-clean:
 	docker compose down rabbitmq
-	docker volume rm hlebsol_core_rabbitmq_data
+	docker volume rm testo-app_rabbitmq_data
 
 ##
 # REFACTORING
